@@ -1,0 +1,426 @@
+---
+title: "COVID-19 Vaccine Data Analysis"
+author: "KCS"
+date: "2/7/2022"
+output: 
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+## COVID-19 Vaccine Data Analysis
+
+In this report, we will be reproducing a part of COVID-19 data analysis done in Week #3 of the "Data Science as a field course" as well as do our own analysis with the public COVID-19 vaccination data.
+
+The primary objective is to see what the relationship is with number of vaccines given and new deaths due to COVID.
+
+First, please make sure to install and library() the packages below. These are essential to being able to reproduce this analysis in rmarkdown.
+
+```{r include=FALSE}
+knitr::opts_chunk$set(echo=TRUE)
+```
+
+```{r, warning=FALSE, results='hide'}
+library(prettydoc)
+library(tidyverse)
+library(lubridate)
+library(dplyr)
+```
+
+
+First we will perform exploraroty analysis on the data and then do some statistical modelling for vaccine and new death cases
+
+Locate, copy the file names and and read the urls from the COVID public data from ggithub
+
+```{r, warning=FALSE, results=FALSE}
+url_in<-"https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+file_names<- c(
+  "time_series_covid19_confirmed_global.csv",
+  "time_series_covid19_deaths_global.csv",
+  "time_series_covid19_confirmed_US.csv",
+  "time_series_covid19_deaths_US.csv")
+urls<-str_c(url_in,file_names)
+
+##read datasets
+global_cases<-read_csv(urls[1])
+global_deaths<-read_csv(urls[2])
+US_cases<-read_csv(urls[3])
+US_deaths<-read_csv(urls[4])
+
+```
+
+
+## Tidying and data wrangling
+
+To keep things simple, we will focus on US cases only for this analysis. Join cases and deaths data together and get US data by state and US totals
+
+```{r, message=FALSE}
+##read datasets
+#cases
+US_cases<-US_cases %>%
+  pivot_longer(cols=-(UID:Combined_Key),
+               names_to="date",
+               values_to="cases") %>%
+  select(Admin2:cases) %>%
+  mutate(date=mdy(date)) %>%
+  select(-c(Lat,Long_))
+##deaths
+US_deaths<-US_deaths %>%
+  pivot_longer(cols=-(UID:Population),
+               names_to= "date",
+               values_to="deaths") %>%
+  select(Admin2:deaths) %>%
+  mutate(date=mdy(date)) %>%
+  select(-c(Lat,Long_))
+
+##fulljoin cases and deaths
+US<-US_cases %>% 
+  full_join(US_deaths)
+
+US_by_state<- US %>%
+  group_by(Province_State, Country_Region, date) %>%
+  summarize(cases=sum(cases),deaths=sum(deaths),
+            Population=sum(Population))%>%
+  mutate(deaths_per_mill=deaths*1000000/Population)%>%
+  select(Province_State,Country_Region,date,
+         cases, deaths, deaths_per_mill, Population) %>%
+  ungroup()
+
+US_totals<- US_by_state %>%
+  group_by(Country_Region,date) %>%
+  summarize(cases=sum(cases),deaths=sum(deaths),
+            Population=sum(Population))%>%
+  mutate(deaths_per_mill=deaths*1000000/Population)%>%
+  select(Country_Region,date,
+         cases, deaths, deaths_per_mill, Population) %>%
+  ungroup()
+
+```
+
+## Exploratory Analysis and Visualization
+
+```{r, warning=FALSE, message=FALSE}
+##Let's visualize our data and analyze it
+US_totals %>%
+  filter(cases>0) %>%
+  ggplot(aes(x=date, y=cases))+
+  geom_line(aes(color="cases"))+
+  geom_point(aes(color="cases"))+
+  geom_line(aes(y=deaths, color="deaths"))+
+  geom_point(aes(y=deaths, color="deaths"))+
+  scale_y_log10()+
+  theme(legend.position="bottom",
+        axis.text.x=element_text(angle = 90))+
+  labs(title = "COVID19 in US",y=NULL)
+
+##Let's filter by the state of New York and visualize cases and deaths
+state<- "New York"
+US_by_state %>%
+  filter(Province_State== state) %>%
+  filter(cases>0) %>%
+  ggplot(aes(x=date, y=cases))+
+  geom_line(aes(color="cases"))+
+  geom_point(aes(color="cases"))+
+  geom_line(aes(y=deaths, color="deaths"))+
+  geom_point(aes(y=deaths, color="deaths"))+
+  scale_y_log10()+
+  theme(legend.position="bottom",
+        axis.text.x=element_text(angle = 90))+
+  labs(title = str_c("COVID19 in ", state),y=NULL)
+
+##check what is the max death
+max(US_totals$deaths)
+
+##let's add in new_cases and new deaths as additional variables. 
+##This will be important when looking into vaccintion date after
+
+US_by_state<-US_by_state %>%
+  mutate(new_cases= cases-lag(cases),
+         new_deaths=deaths-lag(deaths))
+US_totals<-US_totals %>%
+  mutate(new_cases= cases-lag(cases),
+         new_deaths=deaths-lag(deaths))
+
+##tail(US_totals %>% select(new_cases, new_deaths, everything()))
+
+##Now graph new cases and new deaths
+US_totals %>%
+  ggplot(aes(x=date, y=new_cases))+
+  geom_line(aes(color="new_cases"))+
+  geom_point(aes(color="new_cases"))+
+  geom_line(aes(y=new_deaths, color="new_deaths"))+
+  geom_point(aes(y=new_deaths, color="new_deaths"))+
+  scale_y_log10()+
+  theme(legend.position="bottom",
+        axis.text.x=element_text(angle = 90))+
+  labs(title = "COVID19 in US",y=NULL)
+
+##Let's single out NEw York and see how that looks
+US_by_state %>%
+  filter(Province_State== state) %>%
+  filter(cases>0) %>%
+  ggplot(aes(x=date, y=new_cases))+
+  geom_line(aes(color="new_cases"))+
+  geom_point(aes(color="new_cases"))+
+  geom_line(aes(y=new_deaths, color="new_deaths"))+
+  geom_point(aes(y=new_deaths, color="new_deaths"))+
+  scale_y_log10()+
+  theme(legend.position="bottom",
+        axis.text.x=element_text(angle = 90))+
+  labs(title = str_c("COVID19 in ", state),y=NULL) 
+
+##which are the worst and bast states?
+US_state_totals<- US_by_state %>%
+  group_by(Province_State) %>%
+  summarize(deaths=max(deaths), cases=max(cases),
+            population=max(Population),
+            cases_per_thou=1000*cases/population,
+            deaths_per_thou=1000*deaths/population) %>%
+  filter(cases>0,population>0)
+```
+
+Code for checking lowest and highest death. Now need to run the code for this analysis
+
+```{r, results='hide'}
+##states with lowest deaths
+US_state_totals%>%
+  slice_min(deaths_per_thou,n=10) %>% 
+  select(deaths_per_thou, cases_per_thou, everything())
+
+##stats with highest death
+US_state_totals%>%
+  slice_max(deaths_per_thou,n=10) %>% 
+  select(deaths_per_thou, cases_per_thou, everything())
+```
+
+## Modelling and Statistical Analysis
+
+We will use a linear model to predict deaths from cases
+
+```{r}
+mod<-lm(deaths_per_thou~cases_per_thou, data=US_state_totals)
+summary(mod)
+```
+
+Plot the predicted deaths against actual death
+
+```{r}
+##check info
+##US_state_totals %>% slice_min(cases_per_thou)
+##US_state_totals %>% slice_max(cases_per_thou)
+
+x_grid<-seq(1,151)
+new_df<-tibble(cases_per_thou=x_grid)
+US_state_totals%>% mutate(pred=predict(mod))
+US_tot_w_pred<-US_state_totals%>% mutate(pred=predict(mod))
+
+##finally plot cases per thousand vs deaths per thousand
+US_tot_w_pred %>% ggplot()+
+  geom_point(aes(x=cases_per_thou,
+                 y=deaths_per_thou),
+             color="blue")+
+  geom_point(aes(x=cases_per_thou,
+                 y=pred),
+             color="red")
+
+```
+
+## Vaccination Data Analysis
+
+We will use similar techniques to read the vaccinations public data and merge it with the US_by_state data. 
+
+```{r}
+datvac<-read_csv("https://raw.githubusercontent.com/owid/covid-19-data/master/public/data/vaccinations/us_state_vaccinations.csv")
+View(datvac)
+
+datvac$Province_State<-datvac$location
+
+USvacc<-merge(US_by_state, datvac,
+              by=c("Province_State","date"),
+              all = TRUE)
+```
+
+Missing values will be prominenet because vacccinations weren't avaiable until beginning of 2021. 
+To address this, we will fill in na values with 0 to indicate no vaccinations
+
+```{r}
+USvacc[is.na(USvacc)] <- 0
+```
+
+Convert variable to appropriate data type.
+Let's calculate some variables to visualize and then summarize all of the data by country (US). 
+
+```{r}
+USvacc2<-USvacc %>% mutate_if(is.character,as.factor)
+
+us_dat_with_vacc<-USvacc2 %>%
+  group_by(date) %>%
+  summarise_if(is.numeric,funs(sum(.,na.rm=TRUE)))
+
+us_dat_with_vacc<- us_dat_with_vacc %>%
+  mutate(cases_per_thou=1000*cases/Population,
+         deaths_per_thou=1000*deaths/Population,
+         vacc_per_thou=1000*people_vaccinated/Population,
+         new_cases_pt=1000*new_cases/Population,
+         new_deaths_pt=1000*new_deaths/Population,
+         vacc_per_thou=1000*people_vaccinated/Population
+  ) %>%
+  filter(new_cases>-1,new_deaths>-1,
+         Population>0)
+```
+
+Let's visulaze, new deaths, new cases, daily vaccinatinons and total vaccinations to see what the trends are.
+
+```{r}
+newdeathp<-ggplot(data=us_dat_with_vacc, aes(x=date))+
+  geom_smooth(aes(y=new_deaths, color= new_deaths))+
+  geom_line(aes(y=new_deaths, color= new_deaths))
+
+newcasep<-ggplot(data=us_dat_with_vacc, aes(x=date))+
+  geom_smooth(aes(y=new_cases, color= new_cases))+
+  geom_line(aes(y=new_cases, color= new_cases))
+
+daily_vaccp<-ggplot(data=us_dat_with_vacc, aes(x=date))+
+  geom_smooth(aes(y=daily_vaccinations, color= daily_vaccinations))+
+  geom_line(aes(y=daily_vaccinations, color= daily_vaccinations))
+
+total_vaccp<-ggplot(data=us_dat_with_vacc, aes(x=date))+
+  geom_smooth(aes(y=people_fully_vaccinated, color= people_fully_vaccinated))+
+  geom_line(aes(y=people_fully_vaccinated, color= people_fully_vaccinated))
+
+newdeathp;newcasep;daily_vaccp;total_vaccp
+```
+
+Looks like there might be some kind of relationship between vaccinations and new deaths
+
+Now 1et's normalize the data so that the variables are in a 0-1 scale so we can see all data together in a graph
+
+Create function Normalization function
+
+```{r, message=FALSE, warning=FALSE}
+norm_function<-function(dataa)
+{
+  normalize<-function(x){
+    return((x-min(x))/(max(x)-min(x)))
+  }
+  datimpute<-select_if(dataa, is.numeric)
+  norm<-as.data.frame(lapply(datimpute,normalize))
+  norm2<-select_if(dataa,negate(is.numeric))
+  all_dat<-cbind(norm2,norm)
+  return(all_dat)
+}
+
+normdat<-norm_function(us_dat_with_vacc)
+
+##visualize data
+normdat%>% ggplot()+
+  geom_smooth(aes(x=date,
+                  y=new_deaths,
+                  color="new_deaths"))+
+  geom_smooth(aes(x=date,
+                  y=new_cases,
+                  color="new_cases"))+
+  geom_point(aes(x=date,
+                 y=people_vaccinated,
+                 color="total people vaccinated"))+
+  geom_point(aes(x=date,
+                 y=daily_vaccinations,
+                 color="daily_vaccinations"))
+```
+
+Looking at the overall summary of the US data the low model fit suggests there may be other factors not included in the mode that are more predictive of new deaths. Perhaps, masks mandates, number of people working at home and amount of social distancing could all have a stronger relationship with the data and predicting deaths. Those data are not in the dataset.
+
+The spike in new_deaths may be due to lifting mask restictions for mny stats and people deciding to get together because they are tired of the pandemic. A major factor also is that new variants of COVID-19 were discovered in 2021 such as Delta and especially Omicron
+
+```{r}
+modvacc<-lm(new_deaths~people_vaccinated, data=normdat)
+summary(modvacc)
+
+modvaccpred<- normdat%>% mutate(pred=predict(modvacc))
+
+modvaccpred %>% ggplot()+
+  geom_smooth(aes(x=people_vaccinated,
+                  y=new_deaths,
+                  color="Actual new deaths"))+
+  geom_smooth(aes(x=people_vaccinated,
+                  y=pred,
+                  color="Predicted new deaths"))+
+  geom_point(aes(x=people_vaccinated,
+                 y=new_deaths,
+                 color="Actual new deaths"))+
+  geom_point(aes(x=people_vaccinated,
+                 y=pred,
+                 color="Predicted new deaths"))
+```
+
+We can see that deaths dropped around the time vaccinations with given.
+
+Now let's see what happens if we focus on the part of the data where vaccinations were starting to be given.
+
+Let's zoom in on the data and visulize the results
+
+```{r}
+normdat2<- normdat[300:500,]
+
+normdat2%>% ggplot()+
+  geom_smooth(aes(x=date,
+                  y=new_deaths,
+                  color="new_deaths"))+
+  geom_smooth(aes(x=date,
+                  y=new_cases,
+                  color="new_cases"))+
+  geom_point(aes(x=date,
+                 y=people_vaccinated,
+                 color="total people vaccinated"))+
+  geom_point(aes(x=date,
+                 y=daily_vaccinations,
+                 color="daily_vaccinations"))
+```
+
+Theres a much higher adjusted r-squared this time indicating a better fit of the data during the time in which vaccinations were given.
+
+``` {r}
+modvacc2<-lm(new_deaths~people_vaccinated, data=normdat2)
+summary(modvacc2)
+
+modvaccpred2<- normdat2%>% mutate(pred=predict(modvacc2))
+```
+
+We can see that new deaths dropped as more and more people got vaccinations.
+
+```{r}
+modvaccpred2 %>% ggplot()+
+  geom_smooth(aes(x=people_vaccinated,
+                  y=new_deaths,
+                  color="Actual new deaths"))+
+  geom_smooth(aes(x=people_vaccinated,
+                  y=pred,
+                  color="Predicted new deaths"))+
+  geom_point(aes(x=people_vaccinated,
+                 y=new_deaths,
+                 color="Actual new deaths"))+
+  geom_point(aes(x=people_vaccinated,
+                 y=pred,
+                 color="Predicted new deaths")) 
+```
+
+
+## Conclusions and Bias Statements
+
+In our analysis, we see that cases is a good predictor of deaths. This makes sense because if one gets COVID, it is a possibility that you can die from it
+
+In our analysis of the vaccination data we see there isn't much correlation overall with total vacinated people and prediction of new deaths. However when we focus on only the important timepoints when vaccinations were administered, we see decreasing new deaths, indicating that vaccines were effective at preventing new deaths from COVID.
+
+__Possible biases include:__
+
+1. Recording and reporting of cases may differ for each state. We can see some number go lower then back to higher vaklues as evidence for this.
+
+2. Lag in new cases, new deaths due to vaccine.
+
+3. Other factors were not included in the analysis because they were not in the datasets. These include but are not limited tp: mask mandate lengths and easing of restictions, stay at home orders and social distance. These may also be difficult to quantify.
+
+
+```{r}
+sessionInfo()
+```
+
